@@ -1,10 +1,24 @@
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json')
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$script:LauncherRoot = if ($PSScriptRoot) {
+    $PSScriptRoot
+}
+elseif ($PSCommandPath) {
+    Split-Path -Parent $PSCommandPath
+}
+else {
+    (Get-Location).Path
+}
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $script:LauncherRoot 'config.json'
+}
 
 function Write-LauncherLog {
     param(
@@ -28,7 +42,7 @@ function Resolve-ExistingConfigPath {
         return (Resolve-Path -LiteralPath $PrimaryPath).Path
     }
 
-    $examplePath = Join-Path $PSScriptRoot 'config.example.json'
+    $examplePath = Join-Path $script:LauncherRoot 'config.example.json'
     if (Test-Path -LiteralPath $examplePath -PathType Leaf) {
         Write-LauncherLog -Level 'WARN' -Message "config.json nicht gefunden. Fallback auf config.example.json."
         return (Resolve-Path -LiteralPath $examplePath).Path
@@ -43,32 +57,38 @@ function Get-NormalizedBlockArray {
         [object]$ConfigObject
     )
 
-    if ($null -ne $ConfigObject.blocks) {
-        return @($ConfigObject.blocks)
+    $blocksValue = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'blocks'
+    if ($null -ne $blocksValue) {
+        return @($blocksValue)
     }
 
-    if ($null -ne $ConfigObject.steps) {
+    $stepsValue = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'steps'
+    if ($null -ne $stepsValue) {
         $normalizedBlocks = New-Object System.Collections.Generic.List[object]
 
-        if ($null -ne $ConfigObject.startupDelaySeconds -and [int]$ConfigObject.startupDelaySeconds -gt 0) {
+        $startupDelaySeconds = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'startupDelaySeconds'
+        if ($null -ne $startupDelaySeconds -and [int]$startupDelaySeconds -gt 0) {
             $normalizedBlocks.Add([pscustomobject]@{
                 type = 'delay'
-                seconds = [int]$ConfigObject.startupDelaySeconds
+                seconds = [int]$startupDelaySeconds
             })
         }
 
-        foreach ($step in @($ConfigObject.steps)) {
-            if ($null -ne $step.delaySeconds -and [int]$step.delaySeconds -gt 0) {
+        foreach ($step in @($stepsValue)) {
+            $stepDelaySeconds = Get-ConfigPropertyValue -InputObject $step -PropertyName 'delaySeconds'
+            if ($null -ne $stepDelaySeconds -and [int]$stepDelaySeconds -gt 0) {
                 $normalizedBlocks.Add([pscustomobject]@{
                     type = 'delay'
-                    seconds = [int]$step.delaySeconds
+                    seconds = [int]$stepDelaySeconds
                 })
             }
 
+            $stepName = Get-ConfigPropertyValue -InputObject $step -PropertyName 'name'
+            $stepScripts = Get-ConfigPropertyValue -InputObject $step -PropertyName 'scripts'
             $normalizedBlocks.Add([pscustomobject]@{
                 type = 'step'
-                name = $step.name
-                scripts = $step.scripts
+                name = $stepName
+                scripts = $stepScripts
             })
         }
 
@@ -79,15 +99,87 @@ function Get-NormalizedBlockArray {
     return @()
 }
 
-function Resolve-PythonExecutable {
-    $pythonCommand = Get-Command -Name 'python' -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $pythonCommand) {
-        return $pythonCommand.Source
+function Get-ConfigPropertyValue {
+    param(
+        [Parameter(Mandatory)]
+        [object]$InputObject,
+
+        [Parameter(Mandatory)]
+        [string]$PropertyName
+    )
+
+    $property = $InputObject.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        return $null
     }
 
-    $pyCommand = Get-Command -Name 'py' -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $pyCommand) {
-        return $pyCommand.Source
+    return $property.Value
+}
+
+function Resolve-ApplicationPath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CommandName
+    )
+
+    $candidates = @(Get-Command -Name $CommandName -CommandType Application -ErrorAction SilentlyContinue)
+    if ((Get-CollectionCount -Value $candidates) -eq 0) {
+        return $null
+    }
+
+    $preferred = $candidates | Where-Object { $_.Source -and $_.Source -notmatch '\\WindowsApps\\' } | Select-Object -First 1
+    if ($null -eq $preferred) {
+        $preferred = $candidates | Select-Object -First 1
+    }
+
+    if ($null -eq $preferred -or $null -eq $preferred.Source -or [string]$preferred.Source -eq '') {
+        return $null
+    }
+
+    return [string]$preferred.Source
+}
+
+function Get-CollectionCount {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return 0
+    }
+
+    if ($Value -is [string]) {
+        return 1
+    }
+
+    $countProperty = $Value.PSObject.Properties['Count']
+    if ($null -ne $countProperty -and $null -ne $countProperty.Value) {
+        return [int]$countProperty.Value
+    }
+
+    $enumerable = $Value -as [System.Collections.IEnumerable]
+    if ($null -ne $enumerable) {
+        $count = 0
+        foreach ($item in $enumerable) {
+            $count++
+        }
+
+        return $count
+    }
+
+    return 1
+}
+
+function Resolve-PythonExecutable {
+    $pythonPath = Resolve-ApplicationPath -CommandName 'python'
+    if ($null -ne $pythonPath) {
+        return $pythonPath
+    }
+
+    $pyPath = Resolve-ApplicationPath -CommandName 'py'
+    if ($null -ne $pyPath) {
+        return $pyPath
     }
 
     throw "Weder 'python' noch 'py' wurde gefunden."
@@ -99,11 +191,12 @@ function Resolve-LaunchTarget {
         [object]$ScriptEntry
     )
 
-    if (-not $ScriptEntry.path) {
+    $entryPath = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'path'
+    if ($null -eq $entryPath -or [string]$entryPath -eq '') {
         throw "Ein Script-Eintrag ist unvollstaendig: 'path' fehlt."
     }
 
-    $entryPath = [string]$ScriptEntry.path
+    $entryPath = [string]$entryPath
     if (-not (Test-Path -LiteralPath $entryPath)) {
         throw "Script-Pfad existiert nicht: $entryPath"
     }
@@ -112,8 +205,9 @@ function Resolve-LaunchTarget {
     $workingDirectory = $resolvedPath
     $targetPath = $resolvedPath
     if (Test-Path -LiteralPath $resolvedPath -PathType Container) {
-        if ($ScriptEntry.scriptFile) {
-            $candidate = Join-Path $resolvedPath ([string]$ScriptEntry.scriptFile)
+        $scriptFile = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'scriptFile'
+        if ($null -ne $scriptFile -and [string]$scriptFile -ne '') {
+            $candidate = Join-Path $resolvedPath ([string]$scriptFile)
             if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
                 throw "scriptFile wurde angegeben, existiert aber nicht: $candidate"
             }
@@ -125,15 +219,15 @@ function Resolve-LaunchTarget {
         }
         else {
             $pyFiles = @(Get-ChildItem -LiteralPath $resolvedPath -Filter '*.py' -File)
-            if ($pyFiles.Count -eq 1) {
+            if ((Get-CollectionCount -Value $pyFiles) -eq 1) {
                 $targetPath = $pyFiles[0].FullName
             }
             else {
                 $ps1Files = @(Get-ChildItem -LiteralPath $resolvedPath -Filter '*.ps1' -File)
-                if ($ps1Files.Count -eq 1) {
+                if ((Get-CollectionCount -Value $ps1Files) -eq 1) {
                     $targetPath = $ps1Files[0].FullName
                 }
-                elseif ($ps1Files.Count -gt 1) {
+                elseif ((Get-CollectionCount -Value $ps1Files) -gt 1) {
                     $fileList = $ps1Files | Select-Object -ExpandProperty FullName
                     throw "Im Ordner wurden mehrere .ps1-Dateien gefunden. Bitte 'scriptFile' setzen: $resolvedPath`n$($fileList -join [Environment]::NewLine)"
                 }
@@ -151,25 +245,33 @@ function Resolve-LaunchTarget {
     }
 
     $extension = [System.IO.Path]::GetExtension($targetPath).ToLowerInvariant()
+    $workingDirectory = if (Test-Path -LiteralPath $resolvedPath -PathType Container) {
+        $resolvedPath
+    }
+    else {
+        Split-Path -Parent $targetPath
+    }
     $arguments = New-Object System.Collections.Generic.List[string]
+    $scriptArguments = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'arguments'
 
-    if ($ScriptEntry.arguments) {
-        if ($ScriptEntry.arguments -is [System.Collections.IEnumerable] -and -not ($ScriptEntry.arguments -is [string])) {
-            foreach ($arg in @($ScriptEntry.arguments)) {
+    if ($null -ne $scriptArguments) {
+        if ($scriptArguments -is [System.Collections.IEnumerable] -and -not ($scriptArguments -is [string])) {
+            foreach ($arg in @($scriptArguments)) {
                 if ($null -ne $arg -and [string]$arg -ne '') {
                     $arguments.Add([string]$arg)
                 }
             }
         }
         else {
-            $arguments.Add([string]$ScriptEntry.arguments)
+            $arguments.Add([string]$scriptArguments)
         }
     }
 
     switch ($extension) {
         '.py' {
-            $pythonExe = if ($ScriptEntry.pythonExecutable) {
-                [string]$ScriptEntry.pythonExecutable
+            $pythonExecutable = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'pythonExecutable'
+            $pythonExe = if ($null -ne $pythonExecutable -and [string]$pythonExecutable -ne '') {
+                [string]$pythonExecutable
             }
             else {
                 Resolve-PythonExecutable
@@ -237,18 +339,22 @@ function Start-ConfiguredScript {
     )
 
     $isEnabled = $true
-    if ($null -ne $ScriptEntry.enabled) {
-        $isEnabled = [bool]$ScriptEntry.enabled
+    $enabledValue = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'enabled'
+    if ($null -ne $enabledValue) {
+        $isEnabled = [bool]$enabledValue
     }
 
     if (-not $isEnabled) {
-        $scriptLabel = if ($ScriptEntry.name) { [string]$ScriptEntry.name } else { [string]$ScriptEntry.path }
+        $scriptName = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'name'
+        $scriptPath = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'path'
+        $scriptLabel = if ($null -ne $scriptName -and [string]$scriptName -ne '') { [string]$scriptName } else { [string]$scriptPath }
         Write-LauncherLog -Message "Uebersprungen (deaktiviert): $scriptLabel"
         return
     }
 
     $launchPlan = Resolve-LaunchTarget -ScriptEntry $ScriptEntry
-    $scriptLabel = if ($ScriptEntry.name) { [string]$ScriptEntry.name } else { $launchPlan.DisplayTarget }
+    $scriptName = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'name'
+    $scriptLabel = if ($null -ne $scriptName -and [string]$scriptName -ne '') { [string]$scriptName } else { $launchPlan.DisplayTarget }
     Write-LauncherLog -Message "Starte Script in Step '$StepName': $scriptLabel"
 
     Start-Process -FilePath $launchPlan.FilePath -ArgumentList $launchPlan.ArgumentList -WorkingDirectory $launchPlan.WorkingDirectory -WindowStyle Hidden | Out-Null
@@ -260,8 +366,9 @@ function Invoke-DelayBlock {
     )
 
     $delaySeconds = 0
-    if ($null -ne $DelayBlock.seconds) {
-        $delaySeconds = [int]$DelayBlock.seconds
+    $secondsValue = Get-ConfigPropertyValue -InputObject $DelayBlock -PropertyName 'seconds'
+    if ($null -ne $secondsValue) {
+        $delaySeconds = [int]$secondsValue
     }
 
     if ($delaySeconds -gt 0) {
@@ -281,7 +388,7 @@ function Invoke-Launcher {
     $config = Get-Content -LiteralPath $ResolvedConfigPath -Raw | ConvertFrom-Json
     $blocks = Get-NormalizedBlockArray -ConfigObject $config
 
-    if ($blocks.Count -eq 0) {
+    if ((Get-CollectionCount -Value $blocks) -eq 0) {
         throw "Die Config enthaelt keine Blocks."
     }
 
@@ -294,10 +401,12 @@ function Invoke-Launcher {
             }
 
             'step' {
-                $stepName = if ($block.name) { [string]$block.name } else { 'unnamed-step' }
-                $scripts = @($block.scripts)
+                $blockName = Get-ConfigPropertyValue -InputObject $block -PropertyName 'name'
+                $stepName = if ($null -ne $blockName -and [string]$blockName -ne '') { [string]$blockName } else { 'unnamed-step' }
+                $scriptsValue = Get-ConfigPropertyValue -InputObject $block -PropertyName 'scripts'
+                $scripts = if ($null -ne $scriptsValue) { @($scriptsValue) } else { @() }
 
-                if ($scripts.Count -eq 0) {
+                if ((Get-CollectionCount -Value $scripts) -eq 0) {
                     Write-LauncherLog -Level 'WARN' -Message "Step '$stepName' hat keine Scripts."
                     continue
                 }

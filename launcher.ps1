@@ -99,6 +99,59 @@ function Get-NormalizedBlockArray {
     return @()
 }
 
+function Get-ActivityWatchSettings {
+    param(
+        [Parameter(Mandatory)]
+        [object]$ConfigObject,
+
+        [Parameter(Mandatory)]
+        [object]$BlockObject
+    )
+
+    $baseUrl = 'http://localhost:5600'
+    $retryDelaySeconds = 30
+
+    $blockSettings = Get-ConfigPropertyValue -InputObject $BlockObject -PropertyName 'activityWatch'
+    if ($null -eq $blockSettings) {
+        $blockSettings = $BlockObject
+    }
+
+    $activityWatchSources = @(
+        (Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'activityWatch'),
+        $blockSettings
+    )
+
+    foreach ($source in $activityWatchSources) {
+        if ($null -eq $source) {
+            continue
+        }
+
+        $configuredUrl = Get-ConfigPropertyValue -InputObject $source -PropertyName 'url'
+        if ($null -ne $configuredUrl -and [string]$configuredUrl -ne '') {
+            $baseUrl = [string]$configuredUrl
+        }
+
+        $configuredRetryDelay = Get-ConfigPropertyValue -InputObject $source -PropertyName 'retryDelaySeconds'
+        if ($null -ne $configuredRetryDelay) {
+            $retryDelaySeconds = [int]$configuredRetryDelay
+        }
+    }
+
+    $baseUrl = $baseUrl.TrimEnd('/')
+    if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+        throw 'ActivityWatch URL darf nicht leer sein.'
+    }
+
+    if ($retryDelaySeconds -lt 1) {
+        throw 'ActivityWatch retryDelaySeconds muss mindestens 1 sein.'
+    }
+
+    return [pscustomobject]@{
+        BaseUrl = $baseUrl
+        RetryDelaySeconds = $retryDelaySeconds
+    }
+}
+
 function Get-ConfigPropertyValue {
     param(
         [Parameter(Mandatory)]
@@ -377,6 +430,47 @@ function Invoke-DelayBlock {
     }
 }
 
+function Test-ActivityWatchOnline {
+    param(
+        [Parameter(Mandatory)]
+        [string]$BaseUrl
+    )
+
+    $infoUrl = "$BaseUrl/api/0/info"
+
+    try {
+        $response = Invoke-WebRequest -Uri $infoUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
+        if ($null -ne $response.StatusCode -and [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 300) {
+            return $true
+        }
+    }
+    catch {
+        return $false
+    }
+
+    return $false
+}
+
+function Wait-ForActivityWatchOnline {
+    param(
+        [Parameter(Mandatory)]
+        [string]$BaseUrl,
+
+        [Parameter(Mandatory)]
+        [int]$RetryDelaySeconds
+    )
+
+    $infoUrl = "$BaseUrl/api/0/info"
+
+    while (-not (Test-ActivityWatchOnline -BaseUrl $BaseUrl)) {
+        Write-LauncherLog -Level 'WARN' -Message "ActivityWatch ist noch nicht online: $infoUrl"
+        Write-LauncherLog -Message "Erneuter Versuch in $RetryDelaySeconds Sekunden."
+        Start-Sleep -Seconds $RetryDelaySeconds
+    }
+
+    Write-LauncherLog -Message "ActivityWatch ist online: $infoUrl"
+}
+
 function Invoke-Launcher {
     param(
         [Parameter(Mandatory)]
@@ -398,6 +492,11 @@ function Invoke-Launcher {
         switch ($blockType) {
             'delay' {
                 Invoke-DelayBlock -DelayBlock $block
+            }
+
+            'activityWatchCheck' {
+                $activityWatchSettings = Get-ActivityWatchSettings -ConfigObject $config -BlockObject $block
+                Wait-ForActivityWatchOnline -BaseUrl $activityWatchSettings.BaseUrl -RetryDelaySeconds $activityWatchSettings.RetryDelaySeconds
             }
 
             'step' {

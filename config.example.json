@@ -6,6 +6,12 @@
       "note": "Wait after login before starting the first step."
     },
     {
+      "type": "activityWatchCheck",
+      "url": "http://localhost:5600",
+      "retryDelaySeconds": 30,
+      "note": "Wait until ActivityWatch is online before running the next step."
+    },
+    {
       "type": "step",
       "name": "sync",
       "scripts": [

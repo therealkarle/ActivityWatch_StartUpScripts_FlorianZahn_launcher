@@ -37,6 +37,48 @@ function Resolve-ExistingConfigPath {
     throw "Keine Config gefunden. Erwartet: $PrimaryPath oder $examplePath"
 }
 
+function Normalize-BlockArray {
+    param(
+        [Parameter(Mandatory)]
+        [object]$ConfigObject
+    )
+
+    if ($null -ne $ConfigObject.blocks) {
+        return @($ConfigObject.blocks)
+    }
+
+    if ($null -ne $ConfigObject.steps) {
+        $normalizedBlocks = New-Object System.Collections.Generic.List[object]
+
+        if ($null -ne $ConfigObject.startupDelaySeconds -and [int]$ConfigObject.startupDelaySeconds -gt 0) {
+            $normalizedBlocks.Add([pscustomobject]@{
+                type = 'delay'
+                seconds = [int]$ConfigObject.startupDelaySeconds
+            })
+        }
+
+        foreach ($step in @($ConfigObject.steps)) {
+            if ($null -ne $step.delaySeconds -and [int]$step.delaySeconds -gt 0) {
+                $normalizedBlocks.Add([pscustomobject]@{
+                    type = 'delay'
+                    seconds = [int]$step.delaySeconds
+                })
+            }
+
+            $normalizedBlocks.Add([pscustomobject]@{
+                type = 'step'
+                name = $step.name
+                scripts = $step.scripts
+            })
+        }
+
+        Write-LauncherLog -Level 'WARN' -Message 'Legacy-Config erkannt. Bitte auf das neue blocks-Format umstellen.'
+        return @($normalizedBlocks)
+    }
+
+    return @()
+}
+
 function Resolve-ScriptTarget {
     param(
         [Parameter(Mandatory)]
@@ -133,19 +175,18 @@ function Start-ConfiguredScript {
     Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $workingDirectory -WindowStyle Hidden | Out-Null
 }
 
-function Invoke-StepDelay {
+function Invoke-DelayBlock {
     param(
-        [object]$Step,
-        [string]$StepName
+        [object]$DelayBlock
     )
 
     $delaySeconds = 0
-    if ($null -ne $Step.delaySeconds) {
-        $delaySeconds = [int]$Step.delaySeconds
+    if ($null -ne $DelayBlock.seconds) {
+        $delaySeconds = [int]$DelayBlock.seconds
     }
 
     if ($delaySeconds -gt 0) {
-        Write-LauncherLog -Message "Warte $delaySeconds Sekunden vor Step '$StepName'."
+        Write-LauncherLog -Message "Warte $delaySeconds Sekunden."
         Start-Sleep -Seconds $delaySeconds
     }
 }
@@ -159,34 +200,37 @@ function Invoke-Launcher {
     Write-LauncherLog -Message "Nutze Config: $ResolvedConfigPath"
 
     $config = Get-Content -LiteralPath $ResolvedConfigPath -Raw | ConvertFrom-Json
+    $blocks = Normalize-BlockArray -ConfigObject $config
 
-    $steps = @($config.steps)
-    if ($steps.Count -eq 0) {
-        throw "Die Config enthaelt keine Steps."
+    if ($blocks.Count -eq 0) {
+        throw "Die Config enthaelt keine Blocks."
     }
 
-    $startupDelaySeconds = 0
-    if ($null -ne $config.startupDelaySeconds) {
-        $startupDelaySeconds = [int]$config.startupDelaySeconds
-    }
+    foreach ($block in $blocks) {
+        $blockType = [string]$block.type
 
-    if ($startupDelaySeconds -gt 0) {
-        Write-LauncherLog -Message "Warte $startupDelaySeconds Sekunden nach Startup."
-        Start-Sleep -Seconds $startupDelaySeconds
-    }
+        switch ($blockType) {
+            'delay' {
+                Invoke-DelayBlock -DelayBlock $block
+            }
 
-    foreach ($step in $steps) {
-        $stepName = if ($step.name) { [string]$step.name } else { 'unnamed-step' }
-        Invoke-StepDelay -Step $step -StepName $stepName
+            'step' {
+                $stepName = if ($block.name) { [string]$block.name } else { 'unnamed-step' }
+                $scripts = @($block.scripts)
 
-        $scripts = @($step.scripts)
-        if ($scripts.Count -eq 0) {
-            Write-LauncherLog -Level 'WARN' -Message "Step '$stepName' hat keine Scripts."
-            continue
-        }
+                if ($scripts.Count -eq 0) {
+                    Write-LauncherLog -Level 'WARN' -Message "Step '$stepName' hat keine Scripts."
+                    continue
+                }
 
-        foreach ($scriptEntry in $scripts) {
-            Start-ConfiguredScript -ScriptEntry $scriptEntry -StepName $stepName
+                foreach ($scriptEntry in $scripts) {
+                    Start-ConfiguredScript -ScriptEntry $scriptEntry -StepName $stepName
+                }
+            }
+
+            default {
+                throw "Unbekannter Block-Typ: $blockType"
+            }
         }
     }
 }

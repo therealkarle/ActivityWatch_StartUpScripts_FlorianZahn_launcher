@@ -1,9 +1,13 @@
 {
-  "startupDelaySeconds": 30,
-  "steps": [
+  "blocks": [
     {
+      "type": "delay",
+      "seconds": 30,
+      "note": "Wartezeit direkt nach dem Login."
+    },
+    {
+      "type": "step",
       "name": "synchronisierung",
-      "delaySeconds": 0,
       "scripts": [
         {
           "name": "Android Import",
@@ -19,8 +23,13 @@
       ]
     },
     {
+      "type": "delay",
+      "seconds": 300,
+      "note": "Pause vor dem Export."
+    },
+    {
+      "type": "step",
       "name": "export",
-      "delaySeconds": 300,
       "scripts": [
         {
           "name": "Email Summary",
@@ -31,4 +40,3 @@
     }
   ]
 }
-

@@ -79,7 +79,21 @@ function Normalize-BlockArray {
     return @()
 }
 
-function Resolve-ScriptTarget {
+function Resolve-PythonExecutable {
+    $pythonCommand = Get-Command -Name 'python' -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $pythonCommand) {
+        return $pythonCommand.Source
+    }
+
+    $pyCommand = Get-Command -Name 'py' -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $pyCommand) {
+        return $pyCommand.Source
+    }
+
+    throw "Weder 'python' noch 'py' wurde gefunden."
+}
+
+function Resolve-LaunchTarget {
     param(
         [Parameter(Mandatory)]
         [object]$ScriptEntry
@@ -95,35 +109,124 @@ function Resolve-ScriptTarget {
     }
 
     $resolvedPath = (Resolve-Path -LiteralPath $entryPath).Path
-
-    if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
-        return $resolvedPath
-    }
+    $workingDirectory = $resolvedPath
+    $targetPath = $resolvedPath
+    $targetKind = $null
 
     if (Test-Path -LiteralPath $resolvedPath -PathType Container) {
         if ($ScriptEntry.scriptFile) {
             $candidate = Join-Path $resolvedPath ([string]$ScriptEntry.scriptFile)
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                return (Resolve-Path -LiteralPath $candidate).Path
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                throw "scriptFile wurde angegeben, existiert aber nicht: $candidate"
             }
 
-            throw "scriptFile wurde angegeben, existiert aber nicht: $candidate"
+            $targetPath = (Resolve-Path -LiteralPath $candidate).Path
         }
-
-        $ps1Files = @(Get-ChildItem -LiteralPath $resolvedPath -Filter '*.ps1' -File -Recurse)
-        if ($ps1Files.Count -eq 1) {
-            return $ps1Files[0].FullName
+        elseif (Test-Path -LiteralPath (Join-Path $resolvedPath 'main.py') -PathType Leaf) {
+            $targetPath = (Resolve-Path -LiteralPath (Join-Path $resolvedPath 'main.py')).Path
         }
-
-        if ($ps1Files.Count -eq 0) {
-            throw "Im Ordner wurde keine .ps1-Datei gefunden: $resolvedPath"
+        else {
+            $pyFiles = @(Get-ChildItem -LiteralPath $resolvedPath -Filter '*.py' -File)
+            if ($pyFiles.Count -eq 1) {
+                $targetPath = $pyFiles[0].FullName
+            }
+            else {
+                $ps1Files = @(Get-ChildItem -LiteralPath $resolvedPath -Filter '*.ps1' -File)
+                if ($ps1Files.Count -eq 1) {
+                    $targetPath = $ps1Files[0].FullName
+                }
+                elseif ($ps1Files.Count -gt 1) {
+                    $fileList = $ps1Files | Select-Object -ExpandProperty FullName
+                    throw "Im Ordner wurden mehrere .ps1-Dateien gefunden. Bitte 'scriptFile' setzen: $resolvedPath`n$($fileList -join [Environment]::NewLine)"
+                }
+                else {
+                    throw "Kein eindeutiger Einstiegspunkt gefunden in: $resolvedPath"
+                }
+            }
         }
-
-        $fileList = $ps1Files | Select-Object -ExpandProperty FullName
-        throw "Im Ordner wurden mehrere .ps1-Dateien gefunden. Bitte 'scriptFile' setzen: $resolvedPath`n$($fileList -join [Environment]::NewLine)"
+    }
+    elseif (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
+        $targetPath = $resolvedPath
+    }
+    else {
+        throw "Unerwarteter Pfadtyp: $resolvedPath"
     }
 
-    throw "Unerwarteter Pfadtyp: $resolvedPath"
+    $extension = [System.IO.Path]::GetExtension($targetPath).ToLowerInvariant()
+    $arguments = New-Object System.Collections.Generic.List[string]
+
+    if ($ScriptEntry.arguments) {
+        if ($ScriptEntry.arguments -is [System.Collections.IEnumerable] -and -not ($ScriptEntry.arguments -is [string])) {
+            foreach ($arg in @($ScriptEntry.arguments)) {
+                if ($null -ne $arg -and [string]$arg -ne '') {
+                    $arguments.Add([string]$arg)
+                }
+            }
+        }
+        else {
+            $arguments.Add([string]$ScriptEntry.arguments)
+        }
+    }
+
+    switch ($extension) {
+        '.py' {
+            $pythonExe = if ($ScriptEntry.pythonExecutable) {
+                [string]$ScriptEntry.pythonExecutable
+            }
+            else {
+                Resolve-PythonExecutable
+            }
+
+            if ($pythonExe -ieq 'py') {
+                $launchArgs = @('-3', $targetPath) + @($arguments)
+                return [pscustomobject]@{
+                    FilePath = $pythonExe
+                    ArgumentList = $launchArgs
+                    WorkingDirectory = $workingDirectory
+                    DisplayTarget = $targetPath
+                }
+            }
+
+            return [pscustomobject]@{
+                FilePath = $pythonExe
+                ArgumentList = @($targetPath) + @($arguments)
+                WorkingDirectory = $workingDirectory
+                DisplayTarget = $targetPath
+            }
+        }
+
+        '.ps1' {
+            $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            return [pscustomobject]@{
+                FilePath = $powershellExe
+                ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $targetPath) + @($arguments)
+                WorkingDirectory = $workingDirectory
+                DisplayTarget = $targetPath
+            }
+        }
+
+        '.bat' {
+            return [pscustomobject]@{
+                FilePath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+                ArgumentList = @('/c', $targetPath) + @($arguments)
+                WorkingDirectory = $workingDirectory
+                DisplayTarget = $targetPath
+            }
+        }
+
+        '.cmd' {
+            return [pscustomobject]@{
+                FilePath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+                ArgumentList = @('/c', $targetPath) + @($arguments)
+                WorkingDirectory = $workingDirectory
+                DisplayTarget = $targetPath
+            }
+        }
+
+        default {
+            throw "Nicht unterstuetzter Einstiegspunkt: $targetPath"
+        }
+    }
 }
 
 function Start-ConfiguredScript {
@@ -146,33 +249,11 @@ function Start-ConfiguredScript {
         return
     }
 
-    $scriptPath = Resolve-ScriptTarget -ScriptEntry $ScriptEntry
-    $workingDirectory = Split-Path -Path $scriptPath -Parent
-
-    if ($ScriptEntry.workingDirectory) {
-        $workingDirectory = (Resolve-Path -LiteralPath ([string]$ScriptEntry.workingDirectory)).Path
-    }
-
-    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = @(
-        '-NoProfile'
-        '-ExecutionPolicy', 'Bypass'
-        '-File', $scriptPath
-    )
-
-    if ($ScriptEntry.arguments) {
-        if ($ScriptEntry.arguments -is [System.Collections.IEnumerable] -and -not ($ScriptEntry.arguments -is [string])) {
-            $arguments += @($ScriptEntry.arguments)
-        }
-        else {
-            $arguments += [string]$ScriptEntry.arguments
-        }
-    }
-
-    $scriptLabel = if ($ScriptEntry.name) { [string]$ScriptEntry.name } else { $scriptPath }
+    $launchPlan = Resolve-LaunchTarget -ScriptEntry $ScriptEntry
+    $scriptLabel = if ($ScriptEntry.name) { [string]$ScriptEntry.name } else { $launchPlan.DisplayTarget }
     Write-LauncherLog -Message "Starte Script in Step '$StepName': $scriptLabel"
 
-    Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $workingDirectory -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $launchPlan.FilePath -ArgumentList $launchPlan.ArgumentList -WorkingDirectory $launchPlan.WorkingDirectory -WindowStyle Hidden | Out-Null
 }
 
 function Invoke-DelayBlock {

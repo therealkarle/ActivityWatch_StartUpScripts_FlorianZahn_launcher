@@ -21,15 +21,16 @@ Dieses Repo startet selbst erstellte ActivityWatch-Skripte in konfigurierbaren S
 - `blocks` ist ein Array aus `delay`- und `step`-Blocken in genau der Reihenfolge, in der sie laufen sollen.
 - Ein `delay`-Block enthaelt nur `seconds`.
 - Ein `step`-Block enthaelt `name` und `scripts`.
-- `scripts` enthaelt die zu startenden Pfade.
+- `scripts` enthaelt die zu startenden Script-Dateien.
 - Ein Script kann mit `"enabled": false` deaktiviert bleiben, ohne den Eintrag zu loeschen.
-- Wenn `path` ein Ordner ist, sucht der Launcher automatisch nach genau einer `.ps1`-Datei im Ordner. Wenn mehrere gefunden werden, muss `scriptFile` gesetzt werden.
+- Wenn `path` auf eine `.py`-Datei zeigt, startet der Launcher sie mit `python` oder `py`.
+- Wenn `path` ein Ordner ist, sucht der Launcher nach `main.py`, genau einer `.py`-Datei oder notfalls genau einer `.ps1`-Datei.
 - Alte Configs mit `startupDelaySeconds` und `steps` werden weiterhin gelesen, aber der Launcher gibt dann einen Hinweis und empfiehlt die Umstellung auf `blocks`.
 
 ## Beispiel
 
 Die mitgelieferten lokalen Pfade sind bereits in `config.json` hinterlegt:
 
-- `H:\AppDevelopment\ActivityWatch_Android-Import`
-- `H:\AppDevelopment\ActivityWatch_email_summary`
-- `H:\AppDevelopment\ActivityWatch_iPad_sync_import`
+- `H:\AppDevelopment\ActivityWatch_Android-Import\google_drive_to_activitywatch.py`
+- `H:\AppDevelopment\ActivityWatch_email_summary\activitywatch_email_summary.py`
+- `H:\AppDevelopment\ActivityWatch_iPad_sync_import\main.py`

@@ -15,6 +15,37 @@ elseif ($PSCommandPath) {
 else {
     (Get-Location).Path
 }
+$script:LauncherTranscriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'ActivityWatch_StartUpScripts_FlorianZahn_launcher.log'
+$script:LauncherTranscriptStarted = $false
+
+function Start-LauncherTranscript {
+    if ($script:LauncherTranscriptStarted) {
+        return
+    }
+
+    try {
+        Start-Transcript -LiteralPath $script:LauncherTranscriptPath -Append | Out-Null
+        $script:LauncherTranscriptStarted = $true
+        Write-LauncherLog -Message "Transcript wird nach $script:LauncherTranscriptPath geschrieben."
+    }
+    catch {
+        Write-LauncherLog -Level 'WARN' -Message "Transcript konnte nicht gestartet werden: $($_.Exception.Message)"
+    }
+}
+
+function Stop-LauncherTranscript {
+    if (-not $script:LauncherTranscriptStarted) {
+        return
+    }
+
+    try {
+        Stop-Transcript | Out-Null
+        $script:LauncherTranscriptStarted = $false
+    }
+    catch {
+        # Transcript ist optional und darf den Launcher nicht blockieren.
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $script:LauncherRoot 'config.json'
@@ -421,7 +452,19 @@ function Start-ConfiguredScript {
     $scriptLabel = if ($null -ne $scriptName -and [string]$scriptName -ne '') { [string]$scriptName } else { $launchPlan.DisplayTarget }
     Write-LauncherLog -Message "Starte Script in Step '$StepName': $scriptLabel"
 
-    Start-Process -FilePath $launchPlan.FilePath -ArgumentList $launchPlan.ArgumentList -WorkingDirectory $launchPlan.WorkingDirectory -WindowStyle Hidden | Out-Null
+    Push-Location -LiteralPath $launchPlan.WorkingDirectory
+    try {
+        $launchArguments = @($launchPlan.ArgumentList)
+        & $launchPlan.FilePath @launchArguments
+
+        $exitCode = $LASTEXITCODE
+        if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+            throw "Script '$scriptLabel' wurde mit Exit-Code $exitCode beendet."
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 function Invoke-DelayBlock {
@@ -543,12 +586,22 @@ function Invoke-Launcher {
     }
 }
 
+$script:LauncherExitCode = 0
+
 try {
+    Start-LauncherTranscript
     $resolvedConfigPath = Resolve-ExistingConfigPath -PrimaryPath $ConfigPath
     Invoke-Launcher -ResolvedConfigPath $resolvedConfigPath
     Write-LauncherLog -Message 'Alle konfigurierten Scripts wurden angestossen.'
 }
 catch {
     Write-LauncherLog -Level 'ERROR' -Message $_.Exception.Message
-    exit 1
+    $script:LauncherExitCode = 1
+}
+finally {
+    Stop-LauncherTranscript
+}
+
+if ($script:LauncherExitCode -ne 0) {
+    exit $script:LauncherExitCode
 }

@@ -16,6 +16,12 @@ Dieses Repo startet selbst erstellte ActivityWatch-Skripte in konfigurierbaren S
 2. `setup-startup-shortcut.ps1` einmal ausfuehren.
 3. Danach startet Windows den Launcher automatisch beim Login.
 
+## Ausgabe
+
+- Die Ausgabe der gestarteten Scripts laeuft jetzt durch den Launcher mit, wenn `launcher.ps1` direkt ausgefuehrt wird.
+- Zusaetzlich schreibt der Launcher ein Transcript nach `%TEMP%\ActivityWatch_StartUpScripts_FlorianZahn_launcher.log`.
+- Da der Startup-Shortcut ueber `launcher.vbs` unsichtbar startet, ist das Transcript der verlaesslichste Ort, um Ausgaben nach dem Login zu prüfen.
+
 ## Config-Modell
 
 - `blocks` ist ein Array aus `delay`-, `activityWatchCheck`- und `step`-Blocken in genau der Reihenfolge, in der sie laufen sollen.

@@ -110,6 +110,7 @@ function Get-ActivityWatchSettings {
 
     $baseUrl = 'http://localhost:5600'
     $retryDelaySeconds = 30
+    $maxRetries = 8
 
     $blockSettings = Get-ConfigPropertyValue -InputObject $BlockObject -PropertyName 'activityWatch'
     if ($null -eq $blockSettings) {
@@ -135,6 +136,11 @@ function Get-ActivityWatchSettings {
         if ($null -ne $configuredRetryDelay) {
             $retryDelaySeconds = [int]$configuredRetryDelay
         }
+
+        $configuredMaxRetries = Get-ConfigPropertyValue -InputObject $source -PropertyName 'maxRetries'
+        if ($null -ne $configuredMaxRetries) {
+            $maxRetries = [int]$configuredMaxRetries
+        }
     }
 
     $baseUrl = $baseUrl.TrimEnd('/')
@@ -146,9 +152,14 @@ function Get-ActivityWatchSettings {
         throw 'ActivityWatch retryDelaySeconds muss mindestens 1 sein.'
     }
 
+    if ($maxRetries -lt 1) {
+        throw 'ActivityWatch maxRetries muss mindestens 1 sein.'
+    }
+
     return [pscustomobject]@{
         BaseUrl = $baseUrl
         RetryDelaySeconds = $retryDelaySeconds
+        MaxRetries = $maxRetries
     }
 }
 
@@ -457,18 +468,28 @@ function Wait-ForActivityWatchOnline {
         [string]$BaseUrl,
 
         [Parameter(Mandatory)]
-        [int]$RetryDelaySeconds
+        [int]$RetryDelaySeconds,
+
+        [Parameter(Mandatory)]
+        [int]$MaxRetries
     )
 
     $infoUrl = "$BaseUrl/api/0/info"
 
-    while (-not (Test-ActivityWatchOnline -BaseUrl $BaseUrl)) {
-        Write-LauncherLog -Level 'WARN' -Message "ActivityWatch ist noch nicht online: $infoUrl"
-        Write-LauncherLog -Message "Erneuter Versuch in $RetryDelaySeconds Sekunden."
-        Start-Sleep -Seconds $RetryDelaySeconds
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        if (Test-ActivityWatchOnline -BaseUrl $BaseUrl) {
+            Write-LauncherLog -Message "ActivityWatch ist online: $infoUrl"
+            return
+        }
+
+        if ($attempt -lt $MaxRetries) {
+            Write-LauncherLog -Level 'WARN' -Message "ActivityWatch ist noch nicht online: $infoUrl (Versuch $attempt von $MaxRetries)"
+            Write-LauncherLog -Message "Erneuter Versuch in $RetryDelaySeconds Sekunden."
+            Start-Sleep -Seconds $RetryDelaySeconds
+        }
     }
 
-    Write-LauncherLog -Message "ActivityWatch ist online: $infoUrl"
+    throw "ActivityWatch ist nach $MaxRetries Versuchen noch nicht online: $infoUrl"
 }
 
 function Invoke-Launcher {
@@ -496,7 +517,7 @@ function Invoke-Launcher {
 
             'activityWatchCheck' {
                 $activityWatchSettings = Get-ActivityWatchSettings -ConfigObject $config -BlockObject $block
-                Wait-ForActivityWatchOnline -BaseUrl $activityWatchSettings.BaseUrl -RetryDelaySeconds $activityWatchSettings.RetryDelaySeconds
+                Wait-ForActivityWatchOnline -BaseUrl $activityWatchSettings.BaseUrl -RetryDelaySeconds $activityWatchSettings.RetryDelaySeconds -MaxRetries $activityWatchSettings.MaxRetries
             }
 
             'step' {

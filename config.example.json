@@ -9,6 +9,7 @@
       "type": "activityWatchCheck",
       "url": "http://localhost:5600",
       "retryDelaySeconds": 30,
+      "maxRetries": 8,
       "note": "Wait until ActivityWatch is online before running the next step."
     },
     {

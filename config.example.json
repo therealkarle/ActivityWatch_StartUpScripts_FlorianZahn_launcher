@@ -1,0 +1,34 @@
+{
+  "startupDelaySeconds": 30,
+  "steps": [
+    {
+      "name": "synchronisierung",
+      "delaySeconds": 0,
+      "scripts": [
+        {
+          "name": "Android Import",
+          "path": "H:\\AppDevelopment\\ActivityWatch_Android-Import",
+          "enabled": true
+        },
+        {
+          "name": "iPad Sync Import",
+          "path": "H:\\AppDevelopment\\ActivityWatch_iPad_sync_import",
+          "enabled": false,
+          "note": "Deaktiviert, ohne den Eintrag zu loeschen."
+        }
+      ]
+    },
+    {
+      "name": "export",
+      "delaySeconds": 300,
+      "scripts": [
+        {
+          "name": "Email Summary",
+          "path": "H:\\AppDevelopment\\ActivityWatch_email_summary",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}
+

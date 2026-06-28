@@ -37,7 +37,7 @@ function Resolve-ExistingConfigPath {
     throw "Keine Config gefunden. Erwartet: $PrimaryPath oder $examplePath"
 }
 
-function Normalize-BlockArray {
+function Get-NormalizedBlockArray {
     param(
         [Parameter(Mandatory)]
         [object]$ConfigObject
@@ -111,8 +111,6 @@ function Resolve-LaunchTarget {
     $resolvedPath = (Resolve-Path -LiteralPath $entryPath).Path
     $workingDirectory = $resolvedPath
     $targetPath = $resolvedPath
-    $targetKind = $null
-
     if (Test-Path -LiteralPath $resolvedPath -PathType Container) {
         if ($ScriptEntry.scriptFile) {
             $candidate = Join-Path $resolvedPath ([string]$ScriptEntry.scriptFile)
@@ -281,7 +279,7 @@ function Invoke-Launcher {
     Write-LauncherLog -Message "Nutze Config: $ResolvedConfigPath"
 
     $config = Get-Content -LiteralPath $ResolvedConfigPath -Raw | ConvertFrom-Json
-    $blocks = Normalize-BlockArray -ConfigObject $config
+    $blocks = Get-NormalizedBlockArray -ConfigObject $config
 
     if ($blocks.Count -eq 0) {
         throw "Die Config enthaelt keine Blocks."

@@ -468,7 +468,13 @@ function Start-ConfiguredScript {
         [object]$ScriptEntry,
 
         [Parameter(Mandatory)]
-        [string]$StepName
+        [string]$StepName,
+
+        [Parameter(Mandatory)]
+        [int]$ScriptIndex,
+
+        [Parameter(Mandatory)]
+        [int]$TotalScripts
     )
 
     $isEnabled = $true
@@ -488,7 +494,8 @@ function Start-ConfiguredScript {
     $launchPlan = Resolve-LaunchTarget -ScriptEntry $ScriptEntry
     $scriptName = Get-ConfigPropertyValue -InputObject $ScriptEntry -PropertyName 'name'
     $scriptLabel = if ($null -ne $scriptName -and [string]$scriptName -ne '') { [string]$scriptName } else { $launchPlan.DisplayTarget }
-    Write-LauncherLog -Message "Starte Script in Step '$StepName': $scriptLabel"
+    Write-LauncherLog -Message "Starte Script $ScriptIndex/$TotalScripts in Step '$StepName': $scriptLabel"
+    Write-LauncherLog -Message "Befehl: $($launchPlan.FilePath) $($launchPlan.ArgumentList -join ' ')"
 
     Push-Location -LiteralPath $launchPlan.WorkingDirectory
     try {
@@ -499,6 +506,8 @@ function Start-ConfiguredScript {
         if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
             throw "Script '$scriptLabel' wurde mit Exit-Code $exitCode beendet."
         }
+
+        Write-LauncherLog -Message "Script abgeschlossen: $scriptLabel"
     }
     finally {
         Pop-Location
@@ -507,7 +516,11 @@ function Start-ConfiguredScript {
 
 function Invoke-DelayBlock {
     param(
-        [object]$DelayBlock
+        [object]$DelayBlock,
+
+        [int]$BlockIndex,
+
+        [int]$TotalBlocks
     )
 
     $delaySeconds = 0
@@ -517,8 +530,22 @@ function Invoke-DelayBlock {
     }
 
     if ($delaySeconds -gt 0) {
-        Write-LauncherLog -Message "Warte $delaySeconds Sekunden."
-        Start-Sleep -Seconds $delaySeconds
+        Write-LauncherLog -Message "Block ${BlockIndex}/${TotalBlocks}: Warte $delaySeconds Sekunden."
+
+        $remainingSeconds = $delaySeconds
+        $heartbeatInterval = 60
+
+        while ($remainingSeconds -gt 0) {
+            $sleepSeconds = [Math]::Min($heartbeatInterval, $remainingSeconds)
+            Start-Sleep -Seconds $sleepSeconds
+            $remainingSeconds -= $sleepSeconds
+
+            if ($remainingSeconds -gt 0) {
+                Write-LauncherLog -Message "Block ${BlockIndex}/${TotalBlocks}: noch $remainingSeconds Sekunden bis zum naechsten Schritt."
+            }
+        }
+
+        Write-LauncherLog -Message "Block ${BlockIndex}/${TotalBlocks}: Delay beendet."
     }
 }
 
@@ -558,6 +585,7 @@ function Wait-ForActivityWatchOnline {
     $infoUrl = "$BaseUrl/api/0/info"
 
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        Write-LauncherLog -Message "Pruefe ActivityWatch ($attempt/$MaxRetries): $infoUrl"
         if (Test-ActivityWatchOnline -BaseUrl $BaseUrl) {
             Write-LauncherLog -Message "ActivityWatch ist online: $infoUrl"
             return
@@ -590,12 +618,17 @@ function Invoke-Launcher {
         throw "Die Config enthaelt keine Blocks."
     }
 
+    $totalBlocks = Get-CollectionCount -Value $blocks
+    $blockIndex = 0
+
     foreach ($block in $blocks) {
+        $blockIndex++
         $blockType = [string]$block.type
+        Write-LauncherLog -Message "Block ${blockIndex}/${totalBlocks} startet: $blockType"
 
         switch ($blockType) {
             'delay' {
-                Invoke-DelayBlock -DelayBlock $block
+                Invoke-DelayBlock -DelayBlock $block -BlockIndex $blockIndex -TotalBlocks $totalBlocks
             }
 
             'activityWatchCheck' {
@@ -608,14 +641,17 @@ function Invoke-Launcher {
                 $stepName = if ($null -ne $blockName -and [string]$blockName -ne '') { [string]$blockName } else { 'unnamed-step' }
                 $scriptsValue = Get-ConfigPropertyValue -InputObject $block -PropertyName 'scripts'
                 $scripts = if ($null -ne $scriptsValue) { @($scriptsValue) } else { @() }
+                $totalScripts = Get-CollectionCount -Value $scripts
 
-                if ((Get-CollectionCount -Value $scripts) -eq 0) {
+                if ($totalScripts -eq 0) {
                     Write-LauncherLog -Level 'WARN' -Message "Step '$stepName' hat keine Scripts."
-                    continue
+                    break
                 }
 
+                $scriptIndex = 0
                 foreach ($scriptEntry in $scripts) {
-                    Start-ConfiguredScript -ScriptEntry $scriptEntry -StepName $stepName
+                    $scriptIndex++
+                    Start-ConfiguredScript -ScriptEntry $scriptEntry -StepName $stepName -ScriptIndex $scriptIndex -TotalScripts $totalScripts
                 }
             }
 
@@ -623,6 +659,8 @@ function Invoke-Launcher {
                 throw "Unbekannter Block-Typ: $blockType"
             }
         }
+
+        Write-LauncherLog -Message "Block ${blockIndex}/${totalBlocks} abgeschlossen: $blockType"
     }
 }
 
@@ -644,7 +682,17 @@ try {
     Write-LauncherLog -Message 'Alle konfigurierten Scripts wurden angestossen.'
 }
 catch {
-    Write-LauncherLog -Level 'ERROR' -Message $_.Exception.Message
+    $errorMessage = $_.Exception.Message
+    if ($null -ne $_.ScriptStackTrace -and [string]$_.ScriptStackTrace -ne '') {
+        Write-LauncherLog -Level 'ERROR' -Message $errorMessage
+        if ($null -ne $_.InvocationInfo -and $null -ne $_.InvocationInfo.PositionMessage -and [string]$_.InvocationInfo.PositionMessage -ne '') {
+            Write-LauncherLog -Level 'ERROR' -Message $_.InvocationInfo.PositionMessage
+        }
+        Write-LauncherLog -Level 'ERROR' -Message $_.ScriptStackTrace
+    }
+    else {
+        Write-LauncherLog -Level 'ERROR' -Message $errorMessage
+    }
     $script:LauncherExitCode = 1
 }
 finally {

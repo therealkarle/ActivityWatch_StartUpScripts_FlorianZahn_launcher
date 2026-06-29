@@ -100,7 +100,7 @@ function Get-Percentile {
 
     $sortedValues = @($Values | Sort-Object)
     if ($sortedValues.Count -eq 1) {
-        return [double]::Round($sortedValues[0], 3)
+        return [Math]::Round($sortedValues[0], 3)
     }
 
     $position = ($Percentile / 100.0) * ($sortedValues.Count - 1)
@@ -108,12 +108,12 @@ function Get-Percentile {
     $upperIndex = [Math]::Ceiling($position)
 
     if ($lowerIndex -eq $upperIndex) {
-        return [double]::Round($sortedValues[$lowerIndex], 3)
+        return [Math]::Round($sortedValues[$lowerIndex], 3)
     }
 
     $weight = $position - $lowerIndex
     $interpolated = $sortedValues[$lowerIndex] + (($sortedValues[$upperIndex] - $sortedValues[$lowerIndex]) * $weight)
-    return [double]::Round($interpolated, 3)
+    return [Math]::Round($interpolated, 3)
 }
 
 function Get-SampleStandardDeviation {
@@ -134,7 +134,7 @@ function Get-SampleStandardDeviation {
     }
 
     $variance = $sumSquaredDifferences / ($Values.Count - 1)
-    return [double]::Round([Math]::Sqrt($variance), 3)
+    return [Math]::Round([Math]::Sqrt($variance), 3)
 }
 
 function Get-StartupTimeStats {
@@ -155,9 +155,9 @@ function Get-StartupTimeStats {
         }
     }
 
-    $average = [double]::Round((($Values | Measure-Object -Average).Average), 3)
-    $minimum = [double]::Round((($Values | Measure-Object -Minimum).Minimum), 3)
-    $maximum = [double]::Round((($Values | Measure-Object -Maximum).Maximum), 3)
+    $average = [Math]::Round((($Values | Measure-Object -Average).Average), 3)
+    $minimum = [Math]::Round((($Values | Measure-Object -Minimum).Minimum), 3)
+    $maximum = [Math]::Round((($Values | Measure-Object -Maximum).Maximum), 3)
 
     return [pscustomobject]@{
         Count = $Values.Count
@@ -301,8 +301,8 @@ function Measure-StartupTime {
         return
     }
 
-    $windowsStartToApiReadySeconds = [double]::Round(($readyAtUtc - $BootTime.ToUniversalTime()).TotalSeconds, 3)
-    $launcherStartToApiReadySeconds = [double]::Round(($readyAtUtc - $LauncherStartTimeUtc).TotalSeconds, 3)
+    $windowsStartToApiReadySeconds = [Math]::Round(($readyAtUtc - $BootTime.ToUniversalTime()).TotalSeconds, 3)
+    $launcherStartToApiReadySeconds = [Math]::Round(($readyAtUtc - $LauncherStartTimeUtc).TotalSeconds, 3)
 
     $result = [pscustomobject]@{
         status = 'success'

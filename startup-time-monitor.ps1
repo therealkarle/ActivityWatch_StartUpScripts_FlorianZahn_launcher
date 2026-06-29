@@ -148,17 +148,23 @@ function Get-StartupTimeStats {
             Count = 0
             Average = $null
             SampleStandardDeviation = $null
+            Min = $null
+            Max = $null
             P05 = $null
             P95 = $null
         }
     }
 
     $average = [double]::Round((($Values | Measure-Object -Average).Average), 3)
+    $minimum = [double]::Round((($Values | Measure-Object -Minimum).Minimum), 3)
+    $maximum = [double]::Round((($Values | Measure-Object -Maximum).Maximum), 3)
 
     return [pscustomobject]@{
         Count = $Values.Count
         Average = $average
         SampleStandardDeviation = Get-SampleStandardDeviation -Values $Values
+        Min = $minimum
+        Max = $maximum
         P05 = Get-Percentile -Values $Values -Percentile 5
         P95 = Get-Percentile -Values $Values -Percentile 95
     }

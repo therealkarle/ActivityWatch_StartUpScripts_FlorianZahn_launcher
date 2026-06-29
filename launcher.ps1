@@ -318,6 +318,94 @@ function Resolve-PythonExecutable {
     throw "Weder 'python' noch 'py' wurde gefunden."
 }
 
+function ConvertTo-CommandLineArgumentString {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Arguments
+    )
+
+    $quotedArguments = foreach ($argument in $Arguments) {
+        if ($argument -match '[\s"]') {
+            '"' + ($argument -replace '"', '\"') + '"'
+        }
+        else {
+            $argument
+        }
+    }
+
+    return ($quotedArguments -join ' ')
+}
+
+function Write-CapturedProcessOutput {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Text,
+
+        [Parameter(Mandatory)]
+        [string]$Prefix,
+
+        [ValidateSet('INFO', 'WARN', 'ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return
+    }
+
+    $normalizedText = $Text -replace "`r`n", "`n"
+    foreach ($line in ($normalizedText -split "`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        Write-LauncherLog -Level $Level -Message "$Prefix $line"
+    }
+}
+
+function Invoke-CapturedProcess {
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory)]
+        [string[]]$ArgumentList,
+
+        [Parameter(Mandatory)]
+        [string]$WorkingDirectory,
+
+        [Parameter(Mandatory)]
+        [string]$DisplayTarget
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    try {
+        $argumentString = ConvertTo-CommandLineArgumentString -Arguments $ArgumentList
+        $process = Start-Process -FilePath $FilePath -ArgumentList $argumentString -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru -Wait -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+
+        $stdoutText = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
+        $stderrText = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+
+        Write-CapturedProcessOutput -Text $stdoutText -Prefix "[stdout][$DisplayTarget]"
+        Write-CapturedProcessOutput -Text $stderrText -Prefix "[stderr][$DisplayTarget]" -Level 'ERROR'
+
+        $exitCode = [int]$process.ExitCode
+        if ($exitCode -ne 0) {
+            throw "Script '$DisplayTarget' wurde mit Exit-Code $exitCode beendet."
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
+            Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+        }
+
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Resolve-LaunchTarget {
     param(
         [Parameter(Mandatory)]
@@ -499,14 +587,7 @@ function Start-ConfiguredScript {
 
     Push-Location -LiteralPath $launchPlan.WorkingDirectory
     try {
-        $launchArguments = @($launchPlan.ArgumentList)
-        & $launchPlan.FilePath @launchArguments
-
-        $exitCode = $LASTEXITCODE
-        if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
-            throw "Script '$scriptLabel' wurde mit Exit-Code $exitCode beendet."
-        }
-
+        Invoke-CapturedProcess -FilePath $launchPlan.FilePath -ArgumentList @($launchPlan.ArgumentList) -WorkingDirectory $launchPlan.WorkingDirectory -DisplayTarget $scriptLabel
         Write-LauncherLog -Message "Script abgeschlossen: $scriptLabel"
     }
     finally {
@@ -556,15 +637,31 @@ function Test-ActivityWatchOnline {
     )
 
     $infoUrl = "$BaseUrl/api/0/info"
+    $handler = $null
+    $client = $null
 
     try {
-        $response = Invoke-WebRequest -Uri $infoUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
-        if ($null -ne $response.StatusCode -and [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 300) {
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        $handler.UseProxy = $false
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(5)
+
+        $response = $client.GetAsync($infoUrl).GetAwaiter().GetResult()
+        if ($null -ne $response -and $response.IsSuccessStatusCode) {
             return $true
         }
     }
     catch {
         return $false
+    }
+    finally {
+        if ($null -ne $client) {
+            $client.Dispose()
+        }
+
+        if ($null -ne $handler) {
+            $handler.Dispose()
+        }
     }
 
     return $false

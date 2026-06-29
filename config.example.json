@@ -2,6 +2,9 @@
   "logging": {
     "saveTerminalOutputToLog": true
   },
+  "startupTimeMonitor": {
+    "enabled": true
+  },
   "blocks": [
     {
       "type": "delay",

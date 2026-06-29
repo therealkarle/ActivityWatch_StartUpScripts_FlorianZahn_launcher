@@ -243,6 +243,19 @@ function Get-StartupTimeMonitorSettings {
     )
 
     $baseUrl = 'http://localhost:5600'
+    $isEnabled = $true
+
+    $startupTimeMonitorObject = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'startupTimeMonitor'
+    if ($null -ne $startupTimeMonitorObject) {
+        $configuredEnabled = Get-ConfigPropertyValue -InputObject $startupTimeMonitorObject -PropertyName 'enabled'
+        if ($null -ne $configuredEnabled) {
+            $isEnabled = [bool]$configuredEnabled
+        }
+    }
+
+    if (-not $isEnabled) {
+        return $null
+    }
 
     foreach ($block in @($Blocks)) {
         if ($null -eq $block) {

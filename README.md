@@ -18,12 +18,13 @@ Dieses Repo startet selbst erstellte ActivityWatch-Skripte in konfigurierbaren S
 
 ## Ausgabe
 
-- Die Ausgabe der gestarteten Scripts laeuft jetzt durch den Launcher mit, wenn `launcher.ps1` direkt ausgefuehrt wird.
-- Zusaetzlich schreibt der Launcher ein Transcript nach `%TEMP%\ActivityWatch_StartUpScripts_FlorianZahn_launcher.log`.
+- Wenn `logging.saveTerminalOutputToLog` in der Config auf `true` steht, schreibt der Launcher ein Transcript in `Logs\launcher-YYYYMMDD-HHMMSS.log`.
+- Der `Logs`-Ordner wird bei Bedarf automatisch angelegt.
 - Da der Startup-Shortcut ueber `launcher.vbs` unsichtbar startet, ist das Transcript der verlaesslichste Ort, um Ausgaben nach dem Login zu prüfen.
 
 ## Config-Modell
 
+- `logging.saveTerminalOutputToLog` aktiviert oder deaktiviert das Mitschreiben der Terminalausgabe in eine Logdatei.
 - `blocks` ist ein Array aus `delay`-, `activityWatchCheck`- und `step`-Blocken in genau der Reihenfolge, in der sie laufen sollen.
 - Ein `delay`-Block enthaelt nur `seconds`.
 - Ein `activityWatchCheck`-Block kann `url`, `retryDelaySeconds` und `maxRetries` direkt enthalten. Alternativ akzeptiert der Launcher auch ein eingebettetes `activityWatch`-Objekt mit denselben Feldern.

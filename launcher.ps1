@@ -15,16 +15,27 @@ elseif ($PSCommandPath) {
 else {
     (Get-Location).Path
 }
-$script:LauncherTranscriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'ActivityWatch_StartUpScripts_FlorianZahn_launcher.log'
+$script:LauncherTranscriptPath = $null
 $script:LauncherTranscriptStarted = $false
 
 function Start-LauncherTranscript {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TranscriptPath
+    )
+
     if ($script:LauncherTranscriptStarted) {
         return
     }
 
     try {
-        Start-Transcript -LiteralPath $script:LauncherTranscriptPath -Append | Out-Null
+        $transcriptDirectory = Split-Path -Parent $TranscriptPath
+        if (-not (Test-Path -LiteralPath $transcriptDirectory -PathType Container)) {
+            New-Item -ItemType Directory -Path $transcriptDirectory -Force | Out-Null
+        }
+
+        Start-Transcript -LiteralPath $TranscriptPath -Append | Out-Null
+        $script:LauncherTranscriptPath = $TranscriptPath
         $script:LauncherTranscriptStarted = $true
         Write-LauncherLog -Message "Transcript wird nach $script:LauncherTranscriptPath geschrieben."
     }
@@ -128,6 +139,33 @@ function Get-NormalizedBlockArray {
     }
 
     return @()
+}
+
+function Get-LoggingSettings {
+    param(
+        [Parameter(Mandatory)]
+        [object]$ConfigObject
+    )
+
+    $saveTerminalOutputToLog = $false
+
+    $loggingObject = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'logging'
+    if ($null -ne $loggingObject) {
+        $configuredValue = Get-ConfigPropertyValue -InputObject $loggingObject -PropertyName 'saveTerminalOutputToLog'
+        if ($null -ne $configuredValue) {
+            $saveTerminalOutputToLog = [bool]$configuredValue
+        }
+    }
+    else {
+        $configuredValue = Get-ConfigPropertyValue -InputObject $ConfigObject -PropertyName 'saveTerminalOutputToLog'
+        if ($null -ne $configuredValue) {
+            $saveTerminalOutputToLog = [bool]$configuredValue
+        }
+    }
+
+    return [pscustomobject]@{
+        SaveTerminalOutputToLog = $saveTerminalOutputToLog
+    }
 }
 
 function Get-ActivityWatchSettings {
@@ -538,13 +576,15 @@ function Wait-ForActivityWatchOnline {
 function Invoke-Launcher {
     param(
         [Parameter(Mandatory)]
-        [string]$ResolvedConfigPath
+        [string]$ResolvedConfigPath,
+
+        [Parameter(Mandatory)]
+        [object]$ConfigObject
     )
 
     Write-LauncherLog -Message "Nutze Config: $ResolvedConfigPath"
 
-    $config = Get-Content -LiteralPath $ResolvedConfigPath -Raw | ConvertFrom-Json
-    $blocks = Get-NormalizedBlockArray -ConfigObject $config
+    $blocks = Get-NormalizedBlockArray -ConfigObject $ConfigObject
 
     if ((Get-CollectionCount -Value $blocks) -eq 0) {
         throw "Die Config enthaelt keine Blocks."
@@ -559,7 +599,7 @@ function Invoke-Launcher {
             }
 
             'activityWatchCheck' {
-                $activityWatchSettings = Get-ActivityWatchSettings -ConfigObject $config -BlockObject $block
+                $activityWatchSettings = Get-ActivityWatchSettings -ConfigObject $ConfigObject -BlockObject $block
                 Wait-ForActivityWatchOnline -BaseUrl $activityWatchSettings.BaseUrl -RetryDelaySeconds $activityWatchSettings.RetryDelaySeconds -MaxRetries $activityWatchSettings.MaxRetries
             }
 
@@ -589,9 +629,18 @@ function Invoke-Launcher {
 $script:LauncherExitCode = 0
 
 try {
-    Start-LauncherTranscript
     $resolvedConfigPath = Resolve-ExistingConfigPath -PrimaryPath $ConfigPath
-    Invoke-Launcher -ResolvedConfigPath $resolvedConfigPath
+    $config = Get-Content -LiteralPath $resolvedConfigPath -Raw | ConvertFrom-Json
+    $loggingSettings = Get-LoggingSettings -ConfigObject $config
+
+    if ($loggingSettings.SaveTerminalOutputToLog) {
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $logDirectory = Join-Path $script:LauncherRoot 'Logs'
+        $transcriptPath = Join-Path $logDirectory "launcher-$timestamp.log"
+        Start-LauncherTranscript -TranscriptPath $transcriptPath
+    }
+
+    Invoke-Launcher -ResolvedConfigPath $resolvedConfigPath -ConfigObject $config
     Write-LauncherLog -Message 'Alle konfigurierten Scripts wurden angestossen.'
 }
 catch {

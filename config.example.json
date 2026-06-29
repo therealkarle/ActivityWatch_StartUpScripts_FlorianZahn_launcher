@@ -1,4 +1,7 @@
 {
+  "logging": {
+    "saveTerminalOutputToLog": true
+  },
   "blocks": [
     {
       "type": "delay",

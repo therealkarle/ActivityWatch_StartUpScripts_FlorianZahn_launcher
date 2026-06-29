@@ -15,6 +15,7 @@ elseif ($PSCommandPath) {
 else {
     (Get-Location).Path
 }
+$script:LauncherStartedAtUtc = [DateTimeOffset]::UtcNow
 $script:LauncherTranscriptPath = $null
 $script:LauncherTranscriptStarted = $false
 
@@ -230,6 +231,90 @@ function Get-ActivityWatchSettings {
         RetryDelaySeconds = $retryDelaySeconds
         MaxRetries = $maxRetries
     }
+}
+
+function Get-StartupTimeMonitorSettings {
+    param(
+        [Parameter(Mandatory)]
+        [object]$ConfigObject,
+
+        [Parameter(Mandatory)]
+        [object[]]$Blocks
+    )
+
+    $baseUrl = 'http://localhost:5600'
+
+    foreach ($block in @($Blocks)) {
+        if ($null -eq $block) {
+            continue
+        }
+
+        if ([string]$block.type -ne 'activityWatchCheck') {
+            continue
+        }
+
+        $activityWatchSettings = Get-ActivityWatchSettings -ConfigObject $ConfigObject -BlockObject $block
+        if ($null -ne $activityWatchSettings -and -not [string]::IsNullOrWhiteSpace([string]$activityWatchSettings.BaseUrl)) {
+            $baseUrl = [string]$activityWatchSettings.BaseUrl
+        }
+
+        break
+    }
+
+    if ([string]::IsNullOrWhiteSpace($baseUrl) -or $baseUrl -eq 'http://localhost:5600') {
+        $hasActivityWatchBlock = $false
+        foreach ($block in @($Blocks)) {
+            if ($null -ne $block -and [string]$block.type -eq 'activityWatchCheck') {
+                $hasActivityWatchBlock = $true
+                break
+            }
+        }
+
+        if (-not $hasActivityWatchBlock) {
+            return $null
+        }
+    }
+
+    return [pscustomobject]@{
+        BaseUrl = $baseUrl
+    }
+}
+
+function Start-StartupTimeMonitor {
+    param(
+        [Parameter(Mandatory)]
+        [string]$LauncherStartTimeUtc,
+
+        [Parameter(Mandatory)]
+        [string]$BaseUrl
+    )
+
+    $monitorScriptPath = Join-Path $script:LauncherRoot 'startup-time-monitor.ps1'
+    if (-not (Test-Path -LiteralPath $monitorScriptPath -PathType Leaf)) {
+        Write-LauncherLog -Level 'WARN' -Message "StartupTime-Monitor fehlt: $monitorScriptPath"
+        return
+    }
+
+    $powershellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $logRoot = Join-Path $script:LauncherRoot 'Logs'
+    $argumentList = @(
+        '-NoProfile'
+        '-ExecutionPolicy'
+        'Bypass'
+        '-WindowStyle'
+        'Hidden'
+        '-File'
+        $monitorScriptPath
+        '-BaseUrl'
+        $BaseUrl
+        '-LogRoot'
+        $logRoot
+        '-LauncherStartTimeUtc'
+        $LauncherStartTimeUtc
+    )
+
+    Start-Process -FilePath $powershellPath -ArgumentList $argumentList -WindowStyle Hidden | Out-Null
+    Write-LauncherLog -Message "StartupTime-Monitor gestartet: $monitorScriptPath"
 }
 
 function Get-ConfigPropertyValue {
@@ -704,15 +789,27 @@ function Invoke-Launcher {
         [string]$ResolvedConfigPath,
 
         [Parameter(Mandatory)]
-        [object]$ConfigObject
+        [object]$ConfigObject,
+
+        [object[]]$Blocks
     )
 
     Write-LauncherLog -Message "Nutze Config: $ResolvedConfigPath"
 
-    $blocks = Get-NormalizedBlockArray -ConfigObject $ConfigObject
+    if ($null -eq $Blocks) {
+        $blocks = Get-NormalizedBlockArray -ConfigObject $ConfigObject
+    }
+    else {
+        $blocks = @($Blocks)
+    }
 
     if ((Get-CollectionCount -Value $blocks) -eq 0) {
         throw "Die Config enthaelt keine Blocks."
+    }
+
+    $startupTimeMonitorSettings = Get-StartupTimeMonitorSettings -ConfigObject $ConfigObject -Blocks $blocks
+    if ($null -ne $startupTimeMonitorSettings) {
+        Start-StartupTimeMonitor -LauncherStartTimeUtc $script:LauncherStartedAtUtc.ToString('o') -BaseUrl $startupTimeMonitorSettings.BaseUrl
     }
 
     $totalBlocks = Get-CollectionCount -Value $blocks
@@ -767,6 +864,7 @@ try {
     $resolvedConfigPath = Resolve-ExistingConfigPath -PrimaryPath $ConfigPath
     $config = Get-Content -LiteralPath $resolvedConfigPath -Raw | ConvertFrom-Json
     $loggingSettings = Get-LoggingSettings -ConfigObject $config
+    $blocks = Get-NormalizedBlockArray -ConfigObject $config
 
     if ($loggingSettings.SaveTerminalOutputToLog) {
         $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -775,7 +873,7 @@ try {
         Start-LauncherTranscript -TranscriptPath $transcriptPath
     }
 
-    Invoke-Launcher -ResolvedConfigPath $resolvedConfigPath -ConfigObject $config
+    Invoke-Launcher -ResolvedConfigPath $resolvedConfigPath -ConfigObject $config -Blocks $blocks
     Write-LauncherLog -Message 'Alle konfigurierten Scripts wurden angestossen.'
 }
 catch {

@@ -739,6 +739,7 @@ function Test-ActivityWatchOnline {
     $client = $null
 
     try {
+        Add-Type -AssemblyName System.Net.Http
         $handler = New-Object System.Net.Http.HttpClientHandler
         $handler.UseProxy = $false
         $client = [System.Net.Http.HttpClient]::new($handler)
@@ -746,7 +747,12 @@ function Test-ActivityWatchOnline {
 
         $response = $client.GetAsync($infoUrl).GetAwaiter().GetResult()
         if ($null -ne $response -and $response.IsSuccessStatusCode) {
+            $response.Dispose()
             return $true
+        }
+
+        if ($null -ne $response) {
+            $response.Dispose()
         }
     }
     catch {

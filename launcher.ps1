@@ -436,7 +436,7 @@ function ConvertTo-CommandLineArgumentString {
 
 function Write-CapturedProcessOutput {
     param(
-        [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$Text,
 
         [Parameter(Mandatory)]

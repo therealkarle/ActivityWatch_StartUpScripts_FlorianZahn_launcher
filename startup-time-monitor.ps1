@@ -75,14 +75,34 @@ function Test-ActivityWatchOnline {
     )
 
     $infoUrl = "$BaseUrl/api/0/info"
+    $handler = $null
+    $client = $null
 
     try {
-        $response = Invoke-WebRequest -Uri $infoUrl -Method Get -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-        return ($null -ne $response -and [int]$response.StatusCode -eq 200)
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        $handler.UseProxy = $false
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(5)
+
+        $response = $client.GetAsync($infoUrl).GetAwaiter().GetResult()
+        if ($null -ne $response -and $response.IsSuccessStatusCode) {
+            return $true
+        }
     }
     catch {
         return $false
     }
+    finally {
+        if ($null -ne $client) {
+            $client.Dispose()
+        }
+
+        if ($null -ne $handler) {
+            $handler.Dispose()
+        }
+    }
+
+    return $false
 }
 
 function Get-Percentile {
